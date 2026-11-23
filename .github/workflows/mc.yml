@@ -4,13 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       variants:
-        description: "Wait models, comma separated: legacy | ning:<doors per side> | half"
+        description: "Variants model:doors:flags, comma separated, e.g. ning:12:v2 (flags v2 = alight+distance+noise+loop)"
         default: "ning:12,ning:30,half"
       periods:
         description: "Return periods, comma separated, or 'all'"
         default: "2,100"
       chunks:
-        description: "Threshold index ranges per job (1-21), ';' separated, or 'each'"
+        description: "Threshold index ranges per job (1-23; 22 = 16/35, 23 = 80/100), ';' separated, or 'each'"
         default: "1-7;8-14;15-21"
       runs:
         description: "Monte Carlo runs per threshold (Run_1..Run_N, same seeds as the ninth version)"
@@ -91,7 +91,7 @@ jobs:
           DIAG=""; if [ "${{ inputs.diag }}" = "true" ]; then DIAG="--diag"; fi
           python mc/build_cell.py --period ${{ matrix.period }} --thresholds "${{ matrix.chunk }}" \
             --runs ${{ inputs.runs }} --wait-model ${{ matrix.model }} --n-door ${{ matrix.door }} \
-            --out out/${{ matrix.name }} --jobs $(nproc) $DIAG
+            --flags "${{ matrix.flags }}" --out out/${{ matrix.name }} --jobs $(nproc) $DIAG
           cd out/${{ matrix.name }}
           python -u -B run_P${{ matrix.period }}_${{ matrix.model }}.py 2>&1 | tee run.log
       - uses: actions/upload-artifact@v4

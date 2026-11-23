@@ -27,3 +27,12 @@ Actions → monte-carlo → Run workflow. Example inputs:
 
 Results: one artifact per job (workbooks in the original format), plus `summary` with `summary_cells.csv`,
 `summary_ranking.csv` and `summary_wait_diag.csv`.
+
+## Model revisions of 2026-11-23 (`--flags v2`, see `mc/model_v2_patch.py`)
+- `alight`: directed station access; boarding = walk + wait, alighting = walk only.
+- `distance`: riding time = 1.2 x straight-line inter-station distance / 35 km/h (Maglev 440 s); headways only for waiting.
+- `noise`: the N(0, 0.3) spatial perturbation is drawn once per location per run (no minute-to-minute redraw).
+- `loop`: Line 4 loop timetable rules (from = to station) apply to the whole line.
+- Threshold indices 22 and 23 are the submission scenarios 16/35 and 80/100.
+With all flags off the generated script reproduces the archived results (regression gate); the directed
+implementation reproduces the undirected one exactly when alighting is given the boarding time.

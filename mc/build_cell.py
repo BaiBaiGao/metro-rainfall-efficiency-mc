@@ -39,9 +39,24 @@ def parse_indices(spec):
             out.extend(range(int(a), int(b) + 1))
         else:
             out.append(int(part))
-    if not out or min(out) < 1 or max(out) > 21:
+    if not out or min(out) < 1 or max(out) > 23:
         raise SystemExit(f"bad threshold indices: {spec}")
     return sorted(set(out))
+
+
+FLAG_NAMES = ("alight", "distance", "noise", "loop")
+
+
+def parse_flags(spec):
+    """'' -> all off; 'v2' -> all on; otherwise '+'-joined subset of alight, distance, noise, loop."""
+    spec = (spec or "").strip()
+    names = set(FLAG_NAMES) if spec == "v2" else {x for x in spec.split("+") if x}
+    unknown = names - set(FLAG_NAMES)
+    if unknown:
+        raise SystemExit(f"unknown model flags: {sorted(unknown)}")
+    flags = {name: name in names for name in FLAG_NAMES}
+    flags.update(detour=1.2, speed=35.0, maglev_s=440.0)
+    return flags
 
 
 def build(args):
@@ -120,6 +135,9 @@ def build(args):
         "    if WAIT_DIAG:\n"
         "        _write_wait_diag(shared_context, OUTPUT_DIR, scenario_label)\n",
     )
+    from model_v2_patch import apply as apply_v2
+    flags = parse_flags(args.flags)
+    src = apply_v2(src, flags)
     src = src.replace('if __name__ == "__main__":\n    main()', DIAG_FN + '\nif __name__ == "__main__":\n    main()')
     if "_write_wait_diag(shared_context" not in src or "def _write_wait_diag" not in src:
         raise SystemExit("diag patch failed")
@@ -135,6 +153,7 @@ def build(args):
         "ning_conversion": 0.7 / (float(args.n_door) * 30.0), "flow_split": args.wait_model == "ning",
         "base_sha256": hashlib.sha256(BASE.read_bytes()).hexdigest(),
         "generated_sha256": hashlib.sha256(src.encode("utf-8")).hexdigest(),
+        "model_flags": parse_flags(args.flags),
     }
     (out_dir / "job_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     print(script)
@@ -174,7 +193,7 @@ def _write_wait_diag(shared_context, output_dir, scenario_label):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--period", type=int, required=True, choices=[2, 5, 10, 25, 50, 100])
-    p.add_argument("--thresholds", default="1-21", help="1-based indices into the 21 threshold pairs, e.g. 1-7 or 1,4,9")
+    p.add_argument("--thresholds", default="1-21", help="1-based indices into the 23 threshold pairs (22 = 16/35, 23 = 80/100), e.g. 1-7 or 1,4,9")
     p.add_argument("--runs", type=int, default=300)
     p.add_argument("--wait-model", choices=["legacy", "ning", "half"], required=True)
     p.add_argument("--n-door", type=float, default=12.0)
@@ -182,4 +201,5 @@ if __name__ == "__main__":
     p.add_argument("--out", required=True)
     p.add_argument("--jobs", type=int, default=4)
     p.add_argument("--diag", action="store_true")
+    p.add_argument("--flags", default="", help="model revisions: v2 (all) or alight+distance+noise+loop subset")
     build(p.parse_args())
