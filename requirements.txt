@@ -1,0 +1,7 @@
+numpy==2.5.3
+scipy==1.18.1
+pandas==3.0.5
+networkx==3.7
+joblib==1.6.0
+openpyxl==3.1.5
+pillow==12.3.0

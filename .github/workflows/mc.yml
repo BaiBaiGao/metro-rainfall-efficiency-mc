@@ -1,0 +1,128 @@
+name: monte-carlo
+
+on:
+  workflow_dispatch:
+    inputs:
+      variants:
+        description: "Wait models, comma separated: legacy | ning:<doors per side> | half"
+        default: "ning:12,ning:30,half"
+      periods:
+        description: "Return periods, comma separated, or 'all'"
+        default: "2,100"
+      chunks:
+        description: "Threshold index ranges per job (1-21), ';' separated, or 'each'"
+        default: "1-7;8-14;15-21"
+      runs:
+        description: "Monte Carlo runs per threshold (Run_1..Run_N, same seeds as the ninth version)"
+        default: "20"
+      diag:
+        description: "Write baseline waiting-time diagnostics (true/false)"
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    # Gate: legacy model must reproduce the archived Windows workbook (P100, 5/10, Run_1-4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Verify input files
+        working-directory: inputs
+        run: sha256sum -c SHA256SUMS
+      - name: Legacy run
+        env:
+          MC_AFTER_HOURS: "1"
+        run: |
+          python mc/build_cell.py --period 100 --thresholds 1 --runs 4 --wait-model legacy --out out/regression --jobs 4
+          cd out/regression && python -u -B run_P100_legacy.py
+      - name: Compare with archive
+        run: python mc/regression_check.py out/regression reference/P100_slow5_stop10_runs1-4_archive.csv 1e-9
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: regression
+          path: |
+            out/regression/*.xlsx
+            out/regression/*.json
+            out/regression/*.csv
+
+  plan:
+    needs: regression
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: plan
+        run: python3 mc/plan.py "${{ inputs.variants }}" "${{ inputs.periods }}" "${{ inputs.chunks }}"
+
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Verify input files
+        working-directory: inputs
+        run: sha256sum -c SHA256SUMS
+      - name: Simulate
+        shell: bash
+        env:
+          MC_AFTER_HOURS: "1"
+        run: |
+          DIAG=""; if [ "${{ inputs.diag }}" = "true" ]; then DIAG="--diag"; fi
+          python mc/build_cell.py --period ${{ matrix.period }} --thresholds "${{ matrix.chunk }}" \
+            --runs ${{ inputs.runs }} --wait-model ${{ matrix.model }} --n-door ${{ matrix.door }} \
+            --out out/${{ matrix.name }} --jobs $(nproc) $DIAG
+          cd out/${{ matrix.name }}
+          python -u -B run_P${{ matrix.period }}_${{ matrix.model }}.py 2>&1 | tee run.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            out/${{ matrix.name }}/*.xlsx
+            out/${{ matrix.name }}/*.json
+            out/${{ matrix.name }}/*.csv
+            out/${{ matrix.name }}/run.log
+          retention-days: 30
+
+  summarize:
+    needs: run
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          path: results
+      - run: python mc/summarize.py results
+      - uses: actions/upload-artifact@v4
+        with:
+          name: summary
+          path: |
+            results/summary_*.csv
+          retention-days: 90
