@@ -99,7 +99,13 @@ def build(args):
         "                if FLOW_SPLIT:\n"
         "                    _n_board = sum(1 for _a, _b, _attr in self.G.edges(station_node, data=True)\n"
         "                                   if _attr.get('type') == 'boarding')\n"
-        "                    est['boarding_node_flow'] = est['boarding_node_flow'] / max(1, _n_board)\n",
+        "                    est['boarding_split'] = 1.0 / max(1, _n_board)\n"
+        "                    est['boarding_node_flow'] = est['boarding_node_flow'] * est['boarding_split']\n",
+    )
+    src = replace_once(
+        src,
+        "                    static_data['boarding_node_flow'] = self.G.nodes[node_name].get('flow', 1000)\n",
+        "                    static_data['boarding_node_flow'] = self.G.nodes[node_name].get('flow', 1000) * static_data.get('boarding_split', 1.0)\n",
     )
     src = replace_once(
         src,
