@@ -1,0 +1,146 @@
+name: submission-paired-monte-carlo
+
+on:
+  workflow_dispatch:
+    inputs:
+      runs_per_job:
+        description: "Run IDs per task for each threshold and return period (5–100)"
+        default: "25"
+
+permissions:
+  contents: read
+
+env:
+  PYTHONHASHSEED: "0"
+  PYTHONUTF8: "1"
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements_paired.txt
+      - run: python -m pip install -r requirements_paired.txt
+      - name: Verify archived inputs
+        working-directory: inputs
+        run: sha256sum -c SHA256SUMS
+      - name: Reproduce submission P2 workbooks
+        shell: bash
+        run: |
+          for threshold in 16_35 80_100; do
+            out="out/regression/$threshold"
+            python mc/build_paired.py --threshold "$threshold" --period 2 \
+              --run-start 1 --run-end 2 --wait-model legacy --out "$out" --jobs 4
+            python -u -B "$out/run.py" 2>&1 | tee "$out/run.log"
+          done
+      - name: Compare all eight sheets in both routing modes
+        run: python mc/paired_workbooks.py compare out/regression reference --tolerance 1e-9
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: paired_regression
+          path: |
+            out/regression/**/*.xlsx
+            out/regression/**/*.json
+            out/regression/**/run.log
+
+  plan:
+    needs: regression
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: matrix
+        env:
+          RUNS_PER_JOB: ${{ inputs.runs_per_job }}
+        run: python mc/plan_paired.py "$RUNS_PER_JOB"
+
+  run:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    name: ${{ matrix.name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements_paired.txt
+      - run: python -m pip install -r requirements_paired.txt
+      - name: Verify archived inputs
+        working-directory: inputs
+        run: sha256sum -c SHA256SUMS
+      - name: Run both routing modes on each seeded rainfall realization
+        shell: bash
+        env:
+          JOB_NAME: ${{ matrix.name }}
+          THRESHOLD: ${{ matrix.threshold }}
+          PERIOD: ${{ matrix.period }}
+          RUN_START: ${{ matrix.start }}
+          RUN_END: ${{ matrix.end }}
+        run: |
+          out="out/$JOB_NAME"
+          python mc/build_paired.py --threshold "$THRESHOLD" --period "$PERIOD" \
+            --run-start "$RUN_START" --run-end "$RUN_END" --wait-model ning \
+            --n-door 12 --out "$out" --jobs 4
+          python -u -B "$out/run.py" 2>&1 | tee "$out/run.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            out/${{ matrix.name }}/*/*.xlsx
+            out/${{ matrix.name }}/paired_diagnostics.json
+            out/${{ matrix.name }}/run.log
+          retention-days: 30
+
+  summarize:
+    needs: run
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements_paired.txt
+      - run: python -m pip install -r requirements_paired.txt
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: paired_*_P*_R*
+          path: chunks
+      - name: Merge Run_1–Run_100 into submission-format workbooks
+        run: python mc/paired_workbooks.py merge chunks results
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paired_merged
+          path: results/**/*.xlsx
+          if-no-files-found: error
+          retention-days: 90
+      - name: Commit merged workbooks to a results branch
+        run: |
+          cd results
+          git init -q -b "results/paired-${{ github.run_id }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Merged paired workbooks of run ${{ github.run_id }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "HEAD:refs/heads/results/paired-${{ github.run_id }}"

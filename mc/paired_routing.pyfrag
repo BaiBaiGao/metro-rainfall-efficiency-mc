@@ -1,0 +1,163 @@
+# Route methods reproduced from prepare_paired.py and the archived paired P2 scripts.
+    def _finalize_fast_topology(self):
+        """预计算 SciPy 稀疏最短路所需的节点和并行边分组。"""
+        self.station_nodes = [n for n in self.node_list if self.G.nodes[n].get('layer') == 'station']
+        self.station_node_indices = np.asarray([self.node_idx_map[n] for n in self.station_nodes], dtype=np.int32)
+        self.edge_flow_weights = np.asarray([sd['flow_weight'] for sd in self.fast_edge_data], dtype=np.float64)
+        pair_map = {}
+        for edge_index, sd in enumerate(self.fast_edge_data):
+            a, b = sorted((sd['u_idx'], sd['v_idx']))
+            pair_map.setdefault((a, b), []).append(edge_index)
+        ordered_pairs = sorted(pair_map)
+        self.sparse_pair_nodes = np.asarray(ordered_pairs, dtype=np.int32)
+        self.sparse_pair_edge_indices = [np.asarray(pair_map[pair], dtype=np.int32) for pair in ordered_pairs]
+        # [两步选路 20261118] 节点对编号矩阵与并行边分组（静态拓扑，只算一次）
+        node_count = len(self.node_list)
+        self.pair_id_matrix = np.full((node_count, node_count), -1, dtype=np.int32)
+        if len(ordered_pairs):
+            pair_ids = np.arange(len(ordered_pairs), dtype=np.int32)
+            self.pair_id_matrix[self.sparse_pair_nodes[:, 0], self.sparse_pair_nodes[:, 1]] = pair_ids
+            self.pair_id_matrix[self.sparse_pair_nodes[:, 1], self.sparse_pair_nodes[:, 0]] = pair_ids
+        self.pair_first_edge = np.asarray([indices[0] for indices in self.sparse_pair_edge_indices], dtype=np.int64)
+        self.pair_multi_edges = [
+            (pair_index, indices) for pair_index, indices in enumerate(self.sparse_pair_edge_indices) if len(indices) > 1
+        ]
+
+        signature = tuple(
+            (sd['u_idx'], sd['v_idx'], sd['type'], str(sd['line_id']), float(sd['flow_weight']))
+            for sd in self.fast_edge_data
+        )
+        self.edge_signature = signature
+        if self.shared_context is not None and tuple(self.shared_context['edge_signature']) != signature:
+            raise RuntimeError("共享基准上下文的边顺序与当前系统不一致")
+
+
+    def _times_to_tau(self, edge_times):
+        edge_times = np.asarray(edge_times, dtype=np.float64)
+        tau = np.full(edge_times.shape, np.inf, dtype=np.float64)
+        mask = (self.edge_flow_weights > 0) & np.isfinite(edge_times)
+        tau[mask] = edge_times[mask] / self.edge_flow_weights[mask]
+        return tau
+
+
+    def _build_sparse_graph(self, tau):
+        pair_weights = np.full(len(self.sparse_pair_edge_indices), np.inf, dtype=np.float64)
+        for pair_index, edge_indices in enumerate(self.sparse_pair_edge_indices):
+            pair_weights[pair_index] = np.min(tau[edge_indices])
+        valid = np.isfinite(pair_weights) & (pair_weights > 0)
+        pairs = self.sparse_pair_nodes[valid]
+        values = pair_weights[valid]
+        if len(values) == 0:
+            return sparse.csr_matrix((len(self.node_list), len(self.node_list)), dtype=np.float64)
+        rows = np.concatenate((pairs[:, 0], pairs[:, 1]))
+        cols = np.concatenate((pairs[:, 1], pairs[:, 0]))
+        data = np.concatenate((values, values))
+        return sparse.csr_matrix((data, (rows, cols)), shape=(len(self.node_list), len(self.node_list)))
+
+
+    def _efficiency_scipy_from_tau(self, tau, return_station_distances=False):
+        graph = self._build_sparse_graph(tau)
+        distances = csgraph_dijkstra(
+            graph, directed=False, indices=self.station_node_indices, return_predecessors=False
+        )
+        station_distances = distances[:, self.station_node_indices]
+        valid = np.isfinite(station_distances) & (station_distances > 0)
+        sum_inverse = np.sum(1.0 / station_distances[valid], dtype=np.float64)
+        count = len(self.station_nodes)
+        efficiency = sum_inverse / (count * (count - 1)) if count >= 2 else 0.0
+        if return_station_distances:
+            return efficiency, station_distances
+        return efficiency
+
+
+    def _two_step_pair_costs(self, edge_times):
+        edge_times = np.asarray(edge_times, dtype=np.float64)
+        tau = self._times_to_tau(edge_times)
+        usable = np.isfinite(edge_times) & (edge_times > 0) & np.isfinite(tau) & (tau > 0)
+        if not usable.any():
+            return None
+        tie_lambda = self.route_tie_rtol * float(np.min(self.edge_flow_weights[usable]))
+        combined = np.where(usable, edge_times + tie_lambda * tau, np.inf)
+        chosen = self.pair_first_edge.copy()
+        for pair_index, edge_indices in self.pair_multi_edges:
+            chosen[pair_index] = edge_indices[int(np.argmin(combined[edge_indices]))]
+        pair_cost = combined[chosen]
+        finite = np.isfinite(pair_cost)
+        pair_time = np.where(finite, edge_times[chosen], np.inf)
+        pair_tau = np.where(finite, tau[chosen], np.inf)
+        return pair_cost, pair_time, pair_tau
+
+
+    def _two_step_station_matrices(self, edge_times):
+        """返回 (τ 矩阵, 时间矩阵)，行列为车站层节点；不可达为 inf，对角线为 0。"""
+        count = len(self.station_node_indices)
+        costs = self._two_step_pair_costs(edge_times)
+        if costs is None:
+            empty = np.full((count, count), np.inf, dtype=np.float64)
+            np.fill_diagonal(empty, 0.0)
+            return empty, empty.copy()
+        pair_cost, pair_time, pair_tau = costs
+        node_count = len(self.node_list)
+        valid = np.isfinite(pair_cost)
+        pairs = self.sparse_pair_nodes[valid]
+        values = pair_cost[valid]
+        graph = sparse.csr_matrix(
+            (np.concatenate((values, values)),
+             (np.concatenate((pairs[:, 0], pairs[:, 1])), np.concatenate((pairs[:, 1], pairs[:, 0])))),
+            shape=(node_count, node_count),
+        )
+        distances, predecessors = csgraph_dijkstra(
+            graph, directed=False, indices=self.station_node_indices, return_predecessors=True
+        )
+        columns = np.broadcast_to(np.arange(node_count), predecessors.shape)
+        is_root = predecessors < 0
+        ancestor = np.where(is_root, columns, predecessors)
+        pair_ids = self.pair_id_matrix[ancestor, columns]
+        safe_ids = np.where(pair_ids >= 0, pair_ids, 0)
+        path_tau = np.where(is_root, 0.0, pair_tau[safe_ids])
+        path_time = np.where(is_root, 0.0, pair_time[safe_ids])
+        for _ in range(64):
+            next_ancestor = np.take_along_axis(ancestor, ancestor, axis=1)
+            if np.array_equal(next_ancestor, ancestor):
+                break
+            path_tau = path_tau + np.take_along_axis(path_tau, ancestor, axis=1)
+            path_time = path_time + np.take_along_axis(path_time, ancestor, axis=1)
+            ancestor = next_ancestor
+        else:
+            raise RuntimeError("[FAST_PATH_VALIDATION_FAILED] 前驱树累加未收敛")
+        unreachable = ~np.isfinite(distances)
+        path_tau[unreachable] = np.inf
+        path_time[unreachable] = np.inf
+        return path_tau[:, self.station_node_indices], path_time[:, self.station_node_indices]
+
+
+    def _efficiency_two_step_from_times(self, edge_times, return_station_matrices=False):
+        tau_matrix, time_matrix = self._two_step_station_matrices(edge_times)
+        valid = np.isfinite(tau_matrix) & (tau_matrix > 0)
+        count = len(self.station_nodes)
+        sum_inverse = np.sum(1.0 / tau_matrix[valid], dtype=np.float64)
+        efficiency = sum_inverse / (count * (count - 1)) if count >= 2 else 0.0
+        if return_station_matrices:
+            return efficiency, tau_matrix, time_matrix
+        return efficiency
+
+
+
+    def paired_efficiencies(self, clock, line_stats):
+        if not hasattr(self, 'pair_id_matrix'):
+            self.node_list = list(self.G.nodes)
+            self.shared_context = None
+            self.route_tie_rtol = 1e-9
+            self._finalize_fast_topology()
+        waters = [self.G.nodes[n].get('water', 0) for n in self.G]
+        edge_times = []
+        for edge in self.fast_edge_data:
+            water = (waters[edge['u_idx']] + waters[edge['v_idx']]) / 2
+            wet, _, _ = self._calc_times_fast(edge, water, clock, line_stats)
+            dry, _, _ = self._calc_times_fast(edge, 0.0, clock, line_stats=None)
+            edge_times.append((wet, dry))
+        wet, dry = np.asarray(edge_times).T
+        old_wet, old_dry = [self._efficiency_scipy_from_tau(self._times_to_tau(t)) for t in (wet, dry)]
+        new_wet, new_dry = [self._efficiency_two_step_from_times(t) for t in (wet, dry)]
+        return old_wet / old_dry if old_dry else 1.0, new_wet / new_dry if new_dry else 1.0
+
