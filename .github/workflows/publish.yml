@@ -26,11 +26,13 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - uses: actions/download-artifact@v4
-        with:
-          path: results
-          run-id: ${{ inputs.run_id }}
-          github-token: ${{ github.token }}
+      - name: Download all artifacts of the run (gh paginates; download-artifact stopped at 100)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p results
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -D results
+          echo "artifact folders: $(ls results | wc -l)"
       - run: python mc/summarize.py results
       - name: Efficiency tables
         if: inputs.efficiency_csv == 'true'
