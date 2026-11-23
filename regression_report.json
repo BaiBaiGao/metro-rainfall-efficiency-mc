@@ -1,0 +1,12 @@
+{
+  "Affected_Line_Count": 0.0,
+  "Efficiency": 7.771561172376096e-16,
+  "Intensity_Center": 1.4210854715202004e-14,
+  "Location_Lat": 3.552713678800501e-15,
+  "Location_Lon": 1.4210854715202004e-14,
+  "Max_Node_Risk": 9.974659986866641e-17,
+  "Risk_Avg_Q": 1.0061396160665481e-16,
+  "Water_Level_Avg": 1.0658141036401503e-14,
+  "tolerance": 1e-09,
+  "passed": true
+}
