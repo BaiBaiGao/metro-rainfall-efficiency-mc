@@ -60,7 +60,7 @@ jobs:
         run: |
           gh run download "${{ inputs.v2_reference_run }}" -R "${{ github.repository }}" -n ning12_v2_P100_t1 -D ref/v2
           python mc/build_cell.py --period 100 --thresholds 1 --runs 4 --wait-model ning --n-door 12 --flags v2 \
-            --alpha 0.5 --edge-stats --weights main --out out/regression_v2 --jobs 4
+            --alpha 0.5 --edge-stats --weights main --walk deg100 --out out/regression_v2 --jobs 4
           cd out/regression_v2 && python -u -B run_P100_ning.py && cd ../..
           python mc/compare_workbooks.py out/regression_v2 ref/v2 'MonteCarlo_Results_P100_slow5_stop10_*.xlsx' 4 1e-12
           python mc/collect_edge_stats.py out/regression_v2
@@ -123,6 +123,7 @@ jobs:
           if [ "${{ inputs.edge_stats }}" = "true" ]; then DIAG="$DIAG --edge-stats"; fi
           if [ -n "${{ matrix.alpha }}" ]; then DIAG="$DIAG --alpha ${{ matrix.alpha }}"; fi
           if [ -n "${{ matrix.weights }}" ]; then DIAG="$DIAG --weights ${{ matrix.weights }}"; fi
+          if [ -n "${{ matrix.walk }}" ]; then DIAG="$DIAG --walk ${{ matrix.walk }}"; fi
           python mc/build_cell.py --period ${{ matrix.period }} --thresholds "${{ matrix.chunk }}" \
             --runs ${{ inputs.runs }} --wait-model ${{ matrix.model }} --n-door ${{ matrix.door }} \
             --flags "${{ matrix.flags }}" --out out/${{ matrix.name }} --jobs $(nproc) $DIAG

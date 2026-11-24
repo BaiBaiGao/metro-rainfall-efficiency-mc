@@ -10,6 +10,9 @@ weights    : passenger-flow weights of the tau = t / w evaluation (R2-2, R1-M4, 
              'file:<csv>' = per-arc weights from mc/make_weights.py (path relative to the inputs folder),
              keyed by arc so boarding / alighting / riding directions can differ.
              Waiting times keep using the 2025-08-08 hourly flows in every variant.
+walk       : in-station walking distance of boarding/alighting edges (R1-M3, R2-3).
+             'deg100' = unchanged (100 m x degree of the station in the single-layer network);
+             'scale:<f>' = f x 100 m x degree; 'uniform:<m>' = the same distance m at every station.
 edge_stats : per run, count riding edge-minutes that are limited (slower than baseline) or stopped (inf),
              and boarding edge-minutes that are closed (inf) or at/above 7200 s. Written as one JSON per run
              under <out>/edge_stats/ and collected by mc/collect_edge_stats.py. Does not change any result.
@@ -65,8 +68,23 @@ def _sens_arc_weights(system):
 '''
 
 
-def apply(src, alpha=None, edge_stats=False, weights="main", inputs=None):
+WALK_ANCHOR = "                est['boarding_dist'] = deg * 100.0 # 模拟车站内步行距离\n"
+
+
+def apply(src, alpha=None, edge_stats=False, weights="main", inputs=None, walk="deg100"):
     header = ""
+    walk = walk or "deg100"
+    if walk != "deg100":
+        kind, _, value = walk.partition(":")
+        value = float(value)
+        if kind == "scale" and value > 0:
+            expr = f"deg * 100.0 * {value!r}"
+        elif kind == "uniform" and value > 0:
+            expr = f"{value!r}"
+        else:
+            raise SystemExit(f"bad walk spec {walk!r}")
+        src = replace_once(src, WALK_ANCHOR, WALK_ANCHOR.replace("deg * 100.0", expr).rstrip("\n") + " [敏感性 步行]\n")
+    header += f"WALK_SPEC = {walk!r}\n"
     weights = weights or "main"
     if weights not in ("main", "unweighted") and not weights.startswith("file:"):
         raise SystemExit(f"bad weights spec {weights!r}")

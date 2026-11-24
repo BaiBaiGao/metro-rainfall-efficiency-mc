@@ -27,7 +27,7 @@ cols = [f"Run_{i}" for i in range(1, n_runs + 1)]
 qa = {"n_runs": n_runs, "parameter": parameter}
 
 
-BASELINE = {"speed_retention": 0.5, "weights": "main"}[parameter]
+BASELINE = {"speed_retention": 0.5, "weights": "main", "walking": "deg100"}[parameter]
 
 
 def variant_of(meta):
@@ -36,6 +36,8 @@ def variant_of(meta):
     if parameter == "weights":
         w = meta.get("weights", "main")
         return w[5:].split("/")[-1].rsplit(".", 1)[0] if w.startswith("file:") else w
+    if parameter == "walking":
+        return meta.get("walk", "deg100")
     raise SystemExit(f"unknown parameter {parameter}")
 
 
