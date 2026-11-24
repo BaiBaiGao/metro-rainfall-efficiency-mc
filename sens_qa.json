@@ -1,0 +1,13 @@
+{
+  "n_runs": 100,
+  "parameter": "weights",
+  "baseline_workbooks": 138,
+  "sensitivity_workbooks": 414,
+  "cells_per_variant": {
+    "main": 138,
+    "od0801": 138,
+    "static0808": 138,
+    "unweighted": 138
+  },
+  "cells_without_baseline": 0
+}
