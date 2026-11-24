@@ -1,0 +1,13 @@
+{
+  "n_runs": 100,
+  "parameter": "walking",
+  "baseline_workbooks": 138,
+  "sensitivity_workbooks": 414,
+  "cells_per_variant": {
+    "deg100": 138,
+    "scale:0.5": 138,
+    "scale:1.5": 138,
+    "uniform:280": 138
+  },
+  "cells_without_baseline": 0
+}
