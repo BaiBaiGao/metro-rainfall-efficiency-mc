@@ -1,0 +1,13 @@
+{
+  "n_runs": 100,
+  "parameter": "speed_retention",
+  "baseline_workbooks": 138,
+  "sensitivity_workbooks": 276,
+  "edge_counts_identical_across_variants": true,
+  "cells_per_variant": {
+    "0.3": 138,
+    "0.5": 138,
+    "0.7": 138
+  },
+  "cells_without_baseline": 0
+}
