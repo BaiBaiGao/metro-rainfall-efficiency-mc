@@ -104,6 +104,16 @@ jobs:
       - name: Verify input files
         working-directory: inputs
         run: sha256sum -c SHA256SUMS
+      - name: Decrypt private weight tables (OD-derived; key in secret WEIGHTS_KEY)
+        if: hashFiles('inputs/weights/*.csv.enc') != ''
+        shell: bash
+        env:
+          WEIGHTS_KEY: ${{ secrets.WEIGHTS_KEY }}
+        run: |
+          if [ -z "$WEIGHTS_KEY" ]; then echo "WEIGHTS_KEY not set; encrypted tables stay unavailable"; exit 0; fi
+          for f in inputs/weights/*.csv.enc; do
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -in "$f" -out "${f%.enc}" -pass env:WEIGHTS_KEY
+          done
       - name: Simulate
         shell: bash
         env:
