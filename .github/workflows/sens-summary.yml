@@ -1,0 +1,50 @@
+name: sens-summary
+
+# Paired summary of a sensitivity run against the v2 baseline run; commits CSVs to branch results/sens-<run_id>.
+on:
+  workflow_dispatch:
+    inputs:
+      sens_run:
+        description: "monte-carlo run id of the sensitivity experiment"
+        required: true
+      baseline_run:
+        description: "monte-carlo run id of the ning:12:v2 baseline"
+        default: "45202049895"
+      runs:
+        description: "Runs per cell to pair (Run_1..Run_N)"
+        default: "100"
+      parameter:
+        description: "speed_retention"
+        default: "speed_retention"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Download artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ inputs.sens_run }}" -R "${{ github.repository }}" -D sens -p 'ning*'
+          gh run download "${{ inputs.baseline_run }}" -R "${{ github.repository }}" -D base -p 'ning12_v2_P*'
+          echo "sens folders: $(ls sens | wc -l); baseline folders: $(ls base | wc -l)"
+      - run: python mc/summarize_sens.py base sens publish "${{ inputs.runs }}" "${{ inputs.parameter }}"
+      - name: Commit to results branch
+        run: |
+          cd publish
+          git init -q -b "results/sens-${{ inputs.sens_run }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Sensitivity summary of run ${{ inputs.sens_run }} vs ${{ inputs.baseline_run }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "HEAD:refs/heads/results/sens-${{ inputs.sens_run }}"

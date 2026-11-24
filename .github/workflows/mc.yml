@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       variants:
-        description: "Variants model:doors:flags, comma separated, e.g. ning:12:v2 (flags v2 = alight+distance+noise+loop)"
+        description: "Variants model:doors:flags[:alpha], comma separated, e.g. ning:12:v2:0.3 (flags v2 = alight+distance+noise+loop; alpha = speed retention)"
         default: "ning:12,ning:30,half"
       periods:
         description: "Return periods, comma separated, or 'all'"
@@ -18,9 +18,16 @@ on:
       diag:
         description: "Write baseline waiting-time diagnostics (true/false)"
         default: "true"
+      edge_stats:
+        description: "Record limited/stopped edge-minutes per run (true/false)"
+        default: "false"
+      v2_reference_run:
+        description: "Optional run id of a finished ning:12:v2 run; gate: alpha=0.5 + edge stats must reproduce its P100 5/10 Run_1-4 (1e-12)"
+        default: ""
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   regression:
@@ -45,6 +52,18 @@ jobs:
           cd out/regression && python -u -B run_P100_legacy.py
       - name: Compare with archive
         run: python mc/regression_check.py out/regression reference/P100_slow5_stop10_runs1-4_archive.csv 1e-9
+      - name: v2 gate (alpha patch at 0.5 and edge counters leave results unchanged)
+        if: inputs.v2_reference_run != ''
+        env:
+          MC_AFTER_HOURS: "1"
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ inputs.v2_reference_run }}" -R "${{ github.repository }}" -n ning12_v2_P100_t1 -D ref/v2
+          python mc/build_cell.py --period 100 --thresholds 1 --runs 4 --wait-model ning --n-door 12 --flags v2 \
+            --alpha 0.5 --edge-stats --out out/regression_v2 --jobs 4
+          cd out/regression_v2 && python -u -B run_P100_ning.py && cd ../..
+          python mc/compare_workbooks.py out/regression_v2 ref/v2 'MonteCarlo_Results_P100_slow5_stop10_*.xlsx' 4 1e-12
+          python mc/collect_edge_stats.py out/regression_v2
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -53,6 +72,8 @@ jobs:
             out/regression/*.xlsx
             out/regression/*.json
             out/regression/*.csv
+            out/regression_v2/*.json
+            out/regression_v2/*.csv
 
   plan:
     needs: regression
@@ -89,11 +110,15 @@ jobs:
           MC_AFTER_HOURS: "1"
         run: |
           DIAG=""; if [ "${{ inputs.diag }}" = "true" ]; then DIAG="--diag"; fi
+          if [ "${{ inputs.edge_stats }}" = "true" ]; then DIAG="$DIAG --edge-stats"; fi
+          if [ -n "${{ matrix.alpha }}" ]; then DIAG="$DIAG --alpha ${{ matrix.alpha }}"; fi
           python mc/build_cell.py --period ${{ matrix.period }} --thresholds "${{ matrix.chunk }}" \
             --runs ${{ inputs.runs }} --wait-model ${{ matrix.model }} --n-door ${{ matrix.door }} \
             --flags "${{ matrix.flags }}" --out out/${{ matrix.name }} --jobs $(nproc) $DIAG
           cd out/${{ matrix.name }}
           python -u -B run_P${{ matrix.period }}_${{ matrix.model }}.py 2>&1 | tee run.log
+          test "${PIPESTATUS[0]}" -eq 0
+          cd ../.. && python mc/collect_edge_stats.py out/${{ matrix.name }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
