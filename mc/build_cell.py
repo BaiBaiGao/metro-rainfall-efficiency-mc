@@ -139,7 +139,7 @@ def build(args):
     flags = parse_flags(args.flags)
     src = apply_v2(src, flags)
     from sens_patch import apply as apply_sens
-    src = apply_sens(src, alpha=args.alpha, edge_stats=args.edge_stats)
+    src = apply_sens(src, alpha=args.alpha, edge_stats=args.edge_stats, weights=args.weights, inputs=inputs)
     src = src.replace('if __name__ == "__main__":\n    main()', DIAG_FN + '\nif __name__ == "__main__":\n    main()')
     if "_write_wait_diag(shared_context" not in src or "def _write_wait_diag" not in src:
         raise SystemExit("diag patch failed")
@@ -159,6 +159,9 @@ def build(args):
         "speed_retention_alpha": args.alpha if args.alpha is not None else 0.5,
         "alpha_patched": args.alpha is not None,
         "edge_stats": bool(args.edge_stats),
+        "weights": args.weights,
+        "weights_sha256": (hashlib.sha256((inputs / args.weights[5:]).read_bytes()).hexdigest()
+                           if args.weights.startswith("file:") else None),
     }
     (out_dir / "job_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     print(script)
@@ -208,5 +211,6 @@ if __name__ == "__main__":
     p.add_argument("--diag", action="store_true")
     p.add_argument("--flags", default="", help="model revisions: v2 (all) or alight+distance+noise+loop subset")
     p.add_argument("--alpha", type=float, default=None, help="speed retention factor on limited above-ground sections (ninth version: 0.5)")
+    p.add_argument("--weights", default="main", help="main | unweighted | file:<csv relative to inputs>")
     p.add_argument("--edge-stats", action="store_true", help="write per-run limited/stopped edge-minute counts")
     build(p.parse_args())

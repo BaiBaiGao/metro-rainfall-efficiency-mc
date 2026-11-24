@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       sens_run:
-        description: "monte-carlo run id of the sensitivity experiment"
+        description: "monte-carlo run id(s) of the sensitivity experiment, comma separated"
         required: true
       baseline_run:
         description: "monte-carlo run id of the ning:12:v2 baseline"
@@ -14,7 +14,7 @@ on:
         description: "Runs per cell to pair (Run_1..Run_N)"
         default: "100"
       parameter:
-        description: "speed_retention"
+        description: "speed_retention | weights"
         default: "speed_retention"
 
 permissions:
@@ -35,16 +35,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh run download "${{ inputs.sens_run }}" -R "${{ github.repository }}" -D sens -p 'ning*'
+          for run in $(echo "${{ inputs.sens_run }}" | tr ',' ' '); do
+            gh run download "$run" -R "${{ github.repository }}" -D "sens/$run" -p 'ning*'
+          done
           gh run download "${{ inputs.baseline_run }}" -R "${{ github.repository }}" -D base -p 'ning12_v2_P*'
           echo "sens folders: $(ls sens | wc -l); baseline folders: $(ls base | wc -l)"
       - run: python mc/summarize_sens.py base sens publish "${{ inputs.runs }}" "${{ inputs.parameter }}"
       - name: Commit to results branch
         run: |
           cd publish
-          git init -q -b "results/sens-${{ inputs.sens_run }}"
+          git init -q -b "results/sens-${{ github.run_id }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -q -m "Sensitivity summary of run ${{ inputs.sens_run }} vs ${{ inputs.baseline_run }}"
-          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "HEAD:refs/heads/results/sens-${{ inputs.sens_run }}"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" "HEAD:refs/heads/results/sens-${{ github.run_id }}"

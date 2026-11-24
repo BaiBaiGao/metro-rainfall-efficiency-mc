@@ -27,9 +27,15 @@ cols = [f"Run_{i}" for i in range(1, n_runs + 1)]
 qa = {"n_runs": n_runs, "parameter": parameter}
 
 
+BASELINE = {"speed_retention": 0.5, "weights": "main"}[parameter]
+
+
 def variant_of(meta):
     if parameter == "speed_retention":
         return float(meta.get("speed_retention_alpha", 0.5))
+    if parameter == "weights":
+        w = meta.get("weights", "main")
+        return w[5:].split("/")[-1].rsplit(".", 1)[0] if w.startswith("file:") else w
     raise SystemExit(f"unknown parameter {parameter}")
 
 
@@ -60,7 +66,7 @@ cells = {**base, **sens}
 
 rows = []
 for (variant, period, slow, stop), runs in sorted(cells.items()):
-    ref = base.get((0.5 if parameter == "speed_retention" else None, period, slow, stop))
+    ref = base.get((BASELINE, period, slow, stop))
     re_run = runs.sum(axis=0)
     row = {
         "parameter": parameter, "variant": variant, "period": period, "slow": slow, "stop": stop,
@@ -113,8 +119,8 @@ if not edge_df.empty:
     edge_df.to_csv(os.path.join(out_dir, "sens_edge.csv"), index=False, encoding="utf-8-sig")
 
 rank_rows = []
-baseline_variant = 0.5
-for (variant, period), group in cell_df.groupby(["variant", "period"]):
+baseline_variant = BASELINE
+for (variant, period), group in cell_df.groupby(["variant", "period"], sort=False):
     for set_name, sub in (("original_21", group[group.original_21]), ("all_23", group)):
         ref = cell_df[(cell_df.variant == baseline_variant) & (cell_df.period == period)]
         if set_name == "original_21":
